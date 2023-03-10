@@ -1,0 +1,85 @@
+---
+- name: Create WordPress site on EC2 instance using Dockerfile and setup high availability using AWS ElasticBeanstalk
+  hosts: ec2_instance
+  vars:
+    # Variables for creating Docker container
+    wp_db_name: wpdb
+    wp_db_user: wpuser
+    wp_db_password: wp123
+    wp_container_port: 80
+    wp_container_name: wordpress
+
+    # Variables for setting up high availability using AWS ElasticBeanstalk
+    aws_region: us-west-2
+    eb_application_name: my-wordpress-app
+    eb_environment_name: my-wordpress-environment
+    eb_instance_type: t2.micro
+    eb_key_name: my-ec2-key-pair
+    eb_vpc_id: vpc-12345678
+    eb_subnet_id: subnet-12345678
+    eb_security_group_id: sg-12345678
+
+    # Variable for cronjob to run date every hour
+    cron_job: "0 * * * * /bin/date >> /var/log/date.log 2>&1"
+
+  tasks:
+    - name: Install Docker
+      become: true
+      apt:
+        name: docker.io
+        state: present
+
+    - name: Create Dockerfile
+      become: true
+      copy:
+        content: |
+          FROM wordpress
+          COPY wp-config.php /var/www/html/
+        dest: /tmp/Dockerfile
+
+    - name: Build Docker container
+      become: true
+      docker_image:
+        path: /tmp
+        name: "{{ wp_container_name }}"
+        state: present
+        buildargs:
+          DB_NAME: "{{ wp_db_name }}"
+          DB_USER: "{{ wp_db_user }}"
+          DB_PASSWORD: "{{ wp_db_password }}"
+        dockerfile: Dockerfile
+
+    - name: Run Docker container
+      become: true
+      docker_container:
+        name: "{{ wp_container_name }}"
+        image: "{{ wp_container_name }}"
+        ports:
+          - "{{ wp_container_port }}:80"
+        state: started
+
+    - name: Setup high availability using AWS ElasticBeanstalk
+      become: true
+      command: >
+        eb create {{ eb_environment_name }}
+        --region {{ aws_region }}
+        --instance_type {{ eb_instance_type }}
+        --keyname {{ eb_key_name }}
+        --vpc.id {{ eb_vpc_id }}
+        --vpc.ec2subnets {{ eb_subnet_id }}
+        --vpc.elbpublic
+        --vpc.securitygroups {{ eb_security_group_id }}
+        --cname {{ eb_environment_name }}
+        --tags "Name={{ eb_environment_name }}"
+
+    - name: Add cronjob to run date every hour
+      become: true
+      cron:
+        name: "Run date every hour"
+        minute: "{{ cron_job.split()[0] }}"
+        hour: "{{ cron_job.split()[1] }}"
+        day: "{{ cron_job.split()[2] }}"
+        month: "{{ cron_job.split()[3] }}"
+        weekday: "{{ cron_job.split()[4] }}"
+        user: root
+        job: "{{ cron_job.split()[5:] | join(' ') }}"
